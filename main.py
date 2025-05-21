@@ -63,20 +63,22 @@ class VideoWidget(QWidget):
         painter = QPainter(self)
         frame1 = self.cam1.get_frame()
         if frame1 is not None:
+            frame1 = cv2.flip(frame1, 1)
             mh = self.main_height
             mw = int(mh * 16 / 9)
             resized1 = cv2.resize(frame1, (mw, mh))
             img1 = self.cv_to_qimage(resized1)
             painter.drawImage(0, 0, img1)
 
-            frame2 = self.cam2.get_frame()
-            if frame2 is not None:
-                rotated = cv2.rotate(frame2, cv2.ROTATE_90_CLOCKWISE)
-                h, w, _ = rotated.shape
-                sh = self.sub_height
-                sw = int(sh * w / h)
-                resized2 = cv2.resize(rotated, (sw, sh))
-                painter.drawImage(mw + 10, 0, self.cv_to_qimage(resized2))
+        frame2 = self.cam2.get_frame()
+        if frame2 is not None:
+            frame2 = cv2.flip(frame2, 1)
+            rotated = cv2.rotate(frame2, cv2.ROTATE_90_CLOCKWISE)
+            h, w, _ = rotated.shape
+            sh = self.sub_height
+            sw = int(sh * w / h)
+            resized2 = cv2.resize(rotated, (sw, sh))
+            painter.drawImage(mw + 10, 0, self.cv_to_qimage(resized2))
 
     def cv_to_qimage(self, frame):
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -105,10 +107,14 @@ class MainWindow(QWidget):
         self.slider_main_size = QSlider(Qt.Horizontal)
         self.slider_main_size.setRange(360, 1080)
         self.slider_main_size.setValue(720)
+        self.input_main_height = QLineEdit(str(self.slider_main_size.value()))
+        self.input_main_height.setFixedWidth(50)
 
         self.slider_sub_size = QSlider(Qt.Horizontal)
         self.slider_sub_size.setRange(360, 1080)
         self.slider_sub_size.setValue(640)
+        self.input_sub_height = QLineEdit(str(self.slider_sub_size.value()))
+        self.input_sub_height.setFixedWidth(50)
 
         self.slider_delay = QSlider(Qt.Horizontal)
         self.slider_delay.setRange(0, 300)
@@ -116,6 +122,20 @@ class MainWindow(QWidget):
         self.input_delay = QLineEdit("0.0")
         self.input_delay.setFixedWidth(50)
 
+
+        self.slider_main_size.valueChanged.connect(
+            lambda val: self.input_main_height.setText(str(val))
+        )
+        self.input_main_height.editingFinished.connect(
+            lambda: self.slider_main_size.setValue(int(self.input_main_height.text()))
+        )
+
+        self.slider_sub_size.valueChanged.connect(
+            lambda val: self.input_sub_height.setText(str(val))
+        )
+        self.input_sub_height.editingFinished.connect(
+            lambda: self.slider_sub_size.setValue(int(self.input_sub_height.text()))
+        )
 
         self.slider_delay.valueChanged.connect(
             lambda val: self.input_delay.setText(f"{val / 10.0:.1f}")
@@ -127,8 +147,8 @@ class MainWindow(QWidget):
 
         slider_layout = QVBoxLayout()
         for label_text, slider, input_box in [
-            ("Main Video Height", self.slider_main_size, None),
-            ("Sub Video Height", self.slider_sub_size, None),
+            ("Main Video Height", self.slider_main_size, self.input_main_height),
+            ("Sub Video Height", self.slider_sub_size, self.input_sub_height),
             ("Main Delay (sec)", self.slider_delay, self.input_delay),
         ]:
             hbox = QHBoxLayout()
