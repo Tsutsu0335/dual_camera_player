@@ -4,7 +4,7 @@ import threading
 import time
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QSlider, QLabel,
-    QVBoxLayout, QHBoxLayout, QLineEdit
+    QVBoxLayout, QHBoxLayout, QLineEdit, QComboBox
 )
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QPainter, QImage
@@ -78,7 +78,7 @@ class VideoWidget(QWidget):
             sh = self.sub_height
             sw = int(sh * w / h)
             resized2 = cv2.resize(rotated, (sw, sh))
-            painter.drawImage(mw + 10, 0, self.cv_to_qimage(resized2))
+            painter.drawImage(int(self.main_height * 16 / 9) + 10, 0, self.cv_to_qimage(resized2))
 
     def cv_to_qimage(self, frame):
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -100,8 +100,15 @@ class MainWindow(QWidget):
         self.setWindowTitle("Dual Camera with Delay and Adjustable Sizes")
         self.resize(1000, 600)
 
-        self.cam1 = CameraStream(1)
-        self.cam2 = CameraStream(2)
+        self.combo_main_cam = QComboBox()
+        self.combo_sub_cam = QComboBox()
+        self.detect_available_cameras()
+
+        self.combo_main_cam.currentIndexChanged.connect(self.change_main_camera)
+        self.combo_sub_cam.currentIndexChanged.connect(self.change_sub_camera)
+
+        self.cam1 = CameraStream(int(self.combo_main_cam.currentText()))
+        self.cam2 = CameraStream(int(self.combo_sub_cam.currentText()))
         self.video_widget = VideoWidget(self.cam1, self.cam2)
 
         self.slider_main_size = QSlider(Qt.Horizontal)
@@ -158,8 +165,15 @@ class MainWindow(QWidget):
                 hbox.addWidget(input_box)
             slider_layout.addLayout(hbox)
 
+        cam_select_layout = QHBoxLayout()
+        cam_select_layout.addWidget(QLabel("Main Camera:"))
+        cam_select_layout.addWidget(self.combo_main_cam)
+        cam_select_layout.addWidget(QLabel("Sub Camera:"))
+        cam_select_layout.addWidget(self.combo_sub_cam)
+
         main_layout = QVBoxLayout()
         main_layout.addWidget(self.video_widget)
+        main_layout.addLayout(cam_select_layout)
         main_layout.addLayout(slider_layout)
 
         self.setLayout(main_layout)
@@ -167,6 +181,34 @@ class MainWindow(QWidget):
         self.timer = QTimer()
         self.timer.timeout.connect(self.on_timer)
         self.timer.start(16)
+
+
+    def change_main_camera(self, index):
+        new_index = int(self.combo_main_cam.currentText())
+        self.cam1.release()
+        self.cam1 = CameraStream(new_index)
+        self.video_widget.cam1 = self.cam1
+
+    def change_sub_camera(self, index):
+        new_index = int(self.combo_sub_cam.currentText())
+        self.cam2.release()
+        self.cam2 = CameraStream(new_index)
+        self.video_widget.cam2 = self.cam2
+
+    def detect_available_cameras(self, max_index=5):
+        self.available_cameras = []
+        for i in range(max_index):
+            cap = cv2.VideoCapture(i)
+            if cap.isOpened():
+                self.available_cameras.append(str(i))
+                cap.release()
+        if not self.available_cameras:
+            self.available_cameras = ['0']  # fallback
+
+        self.combo_main_cam.addItems(self.available_cameras)
+        self.combo_sub_cam.addItems(self.available_cameras)
+        if len(self.available_cameras) > 1:
+            self.combo_sub_cam.setCurrentIndex(1)
 
     def on_timer(self):
         self.video_widget.set_main_height(self.slider_main_size.value())
