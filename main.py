@@ -104,21 +104,22 @@ class VideoWidget(QWidget):
 
 
 class ControlWindow(QWidget):
-    def __init__(self, cameras, video_widget, apply_camera_change_callback):
+    def __init__(self, cameras, video_widget, apply_camera_change_callback, open_control_window_callback):
         super().__init__()
         self.setWindowTitle("Controls")
         self.cameras = cameras
         self.video_widget = video_widget
         self.apply_camera_change_callback = apply_camera_change_callback
+        self.open_control_window_callback = open_control_window_callback
 
-        self.max_cameras = len(cameras)
+        self.num_cameras = len(cameras)
         self.camera_selectors = []
         self.width_sliders = []
 
         layout = QVBoxLayout()
 
         self.combo_layout = QHBoxLayout()
-        for i in range(self.max_cameras):
+        for i in range(self.num_cameras):
             combo = QComboBox()
             combo.addItems([str(i) for i in range(10)])
             combo.setCurrentIndex(i)
@@ -130,7 +131,7 @@ class ControlWindow(QWidget):
         self.combo_layout.addWidget(self.button_apply)
         layout.addLayout(self.combo_layout)
 
-        for i in range(self.max_cameras):
+        for i in range(self.num_cameras):
             slider = QSlider(Qt.Horizontal)
             slider.setRange(480, 1920)
             slider.setValue(640)
@@ -159,6 +160,9 @@ class ControlWindow(QWidget):
 
     def get_selected_camera_indices(self):
         return [int(cb.currentText()) for cb in self.camera_selectors]
+    
+    def closeEvent(self):
+        self.open_control_window_callback()
 
 
 class MainWindow(QWidget):
@@ -166,9 +170,10 @@ class MainWindow(QWidget):
         super().__init__()
         self.setWindowTitle("Multi-Camera Viewer")
         self.resize(800, 600)
+        self.running = True
 
         # 初期カメラ構成
-        self.cameras = [CameraStream(i) for i in range(4)]
+        self.cameras = [CameraStream(i) for i in range(2)]
         self.video_widget = VideoWidget(self.cameras)
 
         layout = QVBoxLayout()
@@ -176,12 +181,7 @@ class MainWindow(QWidget):
         self.setLayout(layout)
 
         # コントロールウィンドウを生成
-        self.control_window = ControlWindow(
-            self.cameras,
-            self.video_widget,
-            self.change_cameras
-        )
-        self.control_window.show()
+        self.open_control_window()
 
         self.timer = QTimer()
         self.timer.timeout.connect(self.video_widget.update)
@@ -195,7 +195,18 @@ class MainWindow(QWidget):
         self.video_widget.cameras = self.cameras
         self.control_window.cameras = self.cameras  # コントロール側にも更新
 
+    def open_control_window(self):
+        if self.running:
+            self.control_window = ControlWindow(
+                self.cameras,
+                self.video_widget,
+                self.change_cameras,
+                self.open_control_window
+            )
+            self.control_window.show()
+
     def closeEvent(self, a0):
+        self.running = False
         if self.control_window.isVisible():
             self.control_window.close()
         return super().closeEvent(a0)
