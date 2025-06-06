@@ -73,9 +73,10 @@ class CameraStream:
     
     def stop_recording(self):
         self.recording = False
-        if self.writer is not None:
-            self.writer.release()
-            self.writer = None
+        with self.lock:
+            if self.writer is not None:
+                self.writer.release()
+                self.writer = None
 
     def release(self):
         self.running = False
@@ -277,6 +278,11 @@ class MainWindow(QWidget):
         return super().closeEvent(_)
     
 if __name__ == "__main__":
+    try:
+        os.mkdir("./videos")
+    except:
+        pass
+
     app = QApplication(sys.argv)
     w = MainWindow()
     w.show()
