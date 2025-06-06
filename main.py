@@ -1,10 +1,11 @@
 import sys
+import os
 import cv2
 import threading
 import time
 from PyQt5.QtWidgets import (
-    QApplication, QWidget, QSlider, QLabel,
-    QVBoxLayout, QHBoxLayout, QComboBox, QPushButton
+    QApplication, QWidget, QSlider, QLabel, QHBoxLayout,
+    QVBoxLayout, QHBoxLayout, QComboBox, QPushButton, QLineEdit
 )
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QPainter, QImage
@@ -14,15 +15,19 @@ class CameraStream:
     def __init__(self, cam_index, delay_sec=0):
         self.cap = cv2.VideoCapture(cam_index)
         self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
-        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
         self.fps = 60
         self.cap.set(cv2.CAP_PROP_FPS, self.fps)
 
+        self.cam_index = cam_index
         self.delay_sec = delay_sec
         self.buffer = []
         self.running = True
         self.frame = None
+        self.delay_frame = None
+        self.recording = False
+        self.writer = None
         self.lock = threading.Lock()
         self.thread = threading.Thread(target=self.update, daemon=True)
         self.thread.start()
@@ -37,16 +42,40 @@ class CameraStream:
                 self.buffer.append((timestamp, frame))
                 while self.buffer and (timestamp - self.buffer[0][0]) > self.delay_sec:
                     self.buffer.pop(0)
-                self.frame = self.buffer[0][1] if self.buffer else frame
+                self.frame = frame
+                self.delay_frame = self.buffer[0][1] if self.buffer else frame
+            
+                if self.recording and self.writer is not None:
+                    self.writer.write(frame)
+
+
             time.sleep(1 / self.fps)
 
     def get_frame(self):
         with self.lock:
             return self.frame.copy() if self.frame is not None else None
 
+    def get_delay_frame(self):
+        with self.lock:
+            return self.delay_frame.copy() if self.delay_frame is not None else None
+
     def set_delay(self, delay_sec):
         with self.lock:
             self.delay_sec = delay_sec
+    
+    def start_recording(self, output_path):
+        fourcc = cv2.VideoWriter_fourcc(*"MJPG")
+        self.writer = cv2.VideoWriter(output_path, fourcc, self.fps / 2,(
+            int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH)),
+            int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        ))
+        self.recording = True
+    
+    def stop_recording(self):
+        self.recording = False
+        if self.writer is not None:
+            self.writer.release()
+            self.writer = None
 
     def release(self):
         self.running = False
@@ -104,13 +133,14 @@ class VideoWidget(QWidget):
 
 
 class ControlWindow(QWidget):
-    def __init__(self, cameras, video_widget, apply_camera_change_callback, open_control_window_callback):
+    def __init__(self, cameras, video_widget, apply_camera_change_callback, open_control_window_callback, toggle_recording_callback):
         super().__init__()
         self.setWindowTitle("Controls")
         self.cameras = cameras
         self.video_widget = video_widget
         self.apply_camera_change_callback = apply_camera_change_callback
         self.open_control_window_callback = open_control_window_callback
+        self.toggle_recording_callback = toggle_recording_callback
 
         self.num_cameras = len(cameras)
         self.camera_selectors = []
@@ -121,7 +151,7 @@ class ControlWindow(QWidget):
         self.combo_layout = QHBoxLayout()
         for i in range(self.num_cameras):
             combo = QComboBox()
-            combo.addItems([str(i) for i in range(10)])
+            combo.addItems([str(i) for i in range(self.num_cameras)])
             combo.setCurrentIndex(i)
             self.combo_layout.addWidget(QLabel(f"Camera {i+1}:"))
             self.combo_layout.addWidget(combo)
@@ -140,28 +170,44 @@ class ControlWindow(QWidget):
             layout.addWidget(slider)
             self.width_sliders.append(slider)
 
+        delay_layout = QHBoxLayout()
         self.slider_delay = QSlider(Qt.Horizontal)
         self.slider_delay.setRange(0, 400)
         self.slider_delay.setValue(0)
-        self.slider_delay.valueChanged.connect(self.update_delay)
-        layout.addWidget(QLabel("Common Delay (sec)"))
-        layout.addWidget(self.slider_delay)
+        self.slider_delay.valueChanged.connect(self.update_slider_delay)
+        self.input_delay = QLineEdit(str(self.slider_delay.value()))
+        self.input_delay.setFixedWidth(50)
+        self.input_delay.textEdited.connect(self.update_input_delay_values)
+        layout.addWidget(QLabel("Common Delay (100 msec)"))
+        delay_layout.addWidget(self.slider_delay)
+        delay_layout.addWidget(self.input_delay)
+        layout.addLayout(delay_layout)
+
+        layout.addWidget(QLabel("Recording"))
+        self.record_button = QPushButton("Start")
+        self.record_button.clicked.connect(self.toggle_recording_callback)
+        layout.addWidget(self.record_button)
 
         self.setLayout(layout)
 
     def update_slider_values(self):
         widths = [s.value() for s in self.width_sliders]
         self.video_widget.set_video_widths(widths)
+        
+    def update_input_delay_values(self):
+        self.slider_delay.setValue(int(self.input_delay.text()))
 
-    def update_delay(self):
+    def update_slider_delay(self, val):
         delay = self.slider_delay.value() / 10.0
         for cam in self.cameras:
             cam.set_delay(delay)
+        self.input_delay.setText(str(val))
+
 
     def get_selected_camera_indices(self):
         return [int(cb.currentText()) for cb in self.camera_selectors]
     
-    def closeEvent(self):
+    def closeEvent(self, _):
         self.open_control_window_callback()
 
 
@@ -171,6 +217,7 @@ class MainWindow(QWidget):
         self.setWindowTitle("Multi-Camera Viewer")
         self.resize(800, 600)
         self.running = True
+        self.recording = False
 
         # 初期カメラ構成
         self.cameras = [CameraStream(i) for i in range(2)]
@@ -195,23 +242,40 @@ class MainWindow(QWidget):
         self.video_widget.cameras = self.cameras
         self.control_window.cameras = self.cameras  # コントロール側にも更新
 
+    def toggle_recording(self):
+        if not self.recording:
+            timestamp = int(time.time())
+            os.mkdir(f"videos/{timestamp}")
+            for i, cam in enumerate(self.cameras):
+                filename = f"videos/{timestamp}/record_{timestamp}_camera_{i}.avi"
+                cam.start_recording(filename)
+            self.recording = True
+            self.control_window.record_button.setText("Stop")
+        
+        else:
+            for cam in self.cameras:
+                cam.stop_recording()
+            self.recording = False
+            self.control_window.record_button.setText("Start")
+            
+
     def open_control_window(self):
         if self.running:
             self.control_window = ControlWindow(
                 self.cameras,
                 self.video_widget,
                 self.change_cameras,
-                self.open_control_window
+                self.open_control_window,
+                self.toggle_recording
             )
             self.control_window.show()
 
-    def closeEvent(self, a0):
+    def closeEvent(self, _):
         self.running = False
         if self.control_window.isVisible():
             self.control_window.close()
-        return super().closeEvent(a0)
+        return super().closeEvent(_)
     
-
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     w = MainWindow()
