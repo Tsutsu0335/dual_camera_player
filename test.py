@@ -3,12 +3,13 @@ import sys
 
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QPushButton, QWidget, QLineEdit,
-    QVBoxLayout, QHBoxLayout, QSlider, QLabel, QComboBox, QCheckBox
+    QVBoxLayout, QHBoxLayout, QSlider, QLabel, QComboBox, QCheckBox,
+    QTabWidget
 )
 from PyQt6.QtGui import QAction, QPainter, QImage, QColor
 from PyQt6.QtCore import QTimer, Qt
 
-from flowlayout import FlowLayout, remove_layout
+from flowlayout import FlowLayout, remove_layout, clear_layout
 from camera import CameraStream, detect_available_cameras
 
 import cv2
@@ -143,17 +144,27 @@ class SettingWindow(QMainWindow):
     def __init__(self, cam_indexes, videos_widget, available_cameras):
         super().__init__()
         self.setWindowTitle("Setting")
+        self.resize(600, 500)
         self.cam_indexes = cam_indexes
         self.videos_widget = videos_widget
         self.available_cameras = available_cameras
 
-        self.central_widget = QWidget()
-        self.central_layout = QVBoxLayout()
+        self.central_widget = QTabWidget()
         self.setCentralWidget(self.central_widget)
+        
+        self.camera_tab_widget = QWidget()
+        self.camera_tab_layout = QVBoxLayout()
+        self.camera_tab_widget.setLayout(self.camera_tab_layout)
+        self.central_widget.addTab(self.camera_tab_widget, "Camera")
+        
+        self.view_tab_widget = QWidget()
+        self.view_tab_layout = QVBoxLayout()
+        self.view_tab_widget.setLayout(self.view_tab_layout)
+        self.central_widget.addTab(self.view_tab_widget, "View")
 
         self.camera_num_combo = QComboBox()
 
-        self.central_layouts = []
+        self.tab_layouts = [self.camera_tab_layout, self.view_tab_layout]
         self.camera_idx_combos = []
         self.width_sliders = []
         self.delay_slider = QSlider(Qt.Orientation.Horizontal)
@@ -162,20 +173,12 @@ class SettingWindow(QMainWindow):
         self.cross_y_sliders = []
 
         self.reload()
-
-        self.central_widget.setLayout(self.central_layout)
         
-        # self.timer = QTimer()
-        # self.timer.timeout.connect(self.update)
-        # self.timer.start(50)
-    
+        
     def reload(self):
-        for layout in self.central_layouts:
-            remove_layout(layout)
-            self.central_layout.removeItem(layout)
+        for layout in self.tab_layouts:
+            clear_layout(layout)
 
-
-        self.central_layouts = []
         self.camera_idx_combos = []
         self.width_sliders = []
         self.cross_x_sliders = []
@@ -189,15 +192,11 @@ class SettingWindow(QMainWindow):
         print([str(i) for i in range(1, len(self.available_cameras)+1)])
         self.camera_num_combo.addItems([str(i) for i in range(1, len(self.available_cameras)+1)])
         self.camera_num_combo.setCurrentIndex(len(self.cam_indexes) - 1)
-        camera_num_apply_button = QPushButton("Apply")
-        camera_num_apply_button.clicked.connect(self.update_camera_num)
         
         camera_num_layout.addWidget(QLabel(f"Number of cameras:"))
         camera_num_layout.addWidget(self.camera_num_combo)
-        camera_num_layout.addWidget(camera_num_apply_button)
 
-        self.central_layout.addLayout(camera_num_layout)
-        self.central_layouts.append(camera_num_layout)
+        self.camera_tab_layout.addLayout(camera_num_layout)
         #--- camera num combo ---
 
 
@@ -212,12 +211,15 @@ class SettingWindow(QMainWindow):
             camera_idx_layout.addWidget(camera_idx_combo)
 
             self.camera_idx_combos.append(camera_idx_combo)
-        camera_idx_apply_button = QPushButton("Apply")
 
-        self.central_layout.addLayout(camera_idx_layout)
-        self.central_layouts.append(camera_idx_layout)
+        self.camera_tab_layout.addLayout(camera_idx_layout)
 
         #--- camera index combo ---
+
+
+        camera_conf_apply_button = QPushButton("Apply")
+        camera_conf_apply_button.clicked.connect(self.update_camera_num)
+        self.camera_tab_layout.addWidget(camera_conf_apply_button)
         
 
         #--- camera delay slider ---
@@ -232,8 +234,7 @@ class SettingWindow(QMainWindow):
         delay_layout.addWidget(QLabel(f"Camera delay(sec)"))
         delay_layout.addWidget(self.delay_slider)
         delay_layout.addWidget(self.delay_textbox)
-        self.central_layout.addLayout(delay_layout)
-        self.central_layouts.append(delay_layout)
+        self.view_tab_layout.addLayout(delay_layout)
         #--- camera delay slider ---
         
 
@@ -248,8 +249,7 @@ class SettingWindow(QMainWindow):
             slider_layout.addWidget(slider)
             self.width_sliders.append(slider)
 
-            self.central_layout.addLayout(slider_layout)
-            self.central_layouts.append(slider_layout)
+            self.view_tab_layout.addLayout(slider_layout)
         #--- camera size slider ---
 
 
@@ -260,8 +260,7 @@ class SettingWindow(QMainWindow):
         self.cross_checkbox.toggled.connect(self.update_cross_checkbox)
         
         self.cross_layout.addWidget(self.cross_checkbox)
-        self.central_layout.addLayout(self.cross_layout)
-        self.central_layouts.append(self.cross_layout)
+        self.view_tab_layout.addLayout(self.cross_layout)
         #--- display cross ---
 
         #--- cross height slider ---
@@ -284,8 +283,7 @@ class SettingWindow(QMainWindow):
             self.cross_x_sliders.append(slider_x)
             self.cross_y_sliders.append(slider_y)
 
-            self.central_layout.addLayout(slider_layout)
-            self.central_layouts.append(slider_layout)
+            self.view_tab_layout.addLayout(slider_layout)
         #--- cross height slider ---
 
 

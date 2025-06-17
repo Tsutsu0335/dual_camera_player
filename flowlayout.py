@@ -110,3 +110,16 @@ def remove_layout(layout):
                 remove_layout(child_layout)
         layout.setParent(None)
         layout.deleteLater()
+
+
+def clear_layout(layout):
+    if layout is not None:
+        while layout.count():
+            item = layout.takeAt(0)
+            widget = item.widget()
+            child_layout = item.layout()
+            if widget is not None:
+                widget.setParent(None)
+                widget.deleteLater()
+            elif child_layout is not None:
+                remove_layout(child_layout)
