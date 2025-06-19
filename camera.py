@@ -1,6 +1,8 @@
 import threading
 import time
 import cv2
+import ffmpeg
+import numpy as np
 
 class CameraStream:
     def __init__(self, cam_index, delay_sec=0, delay_sec_max=45, fps=30, height=1080, width=1980):
@@ -11,11 +13,17 @@ class CameraStream:
         self.height = height
         self.width = width
 
+        self.now_fps = 0
+
         self.frame = None
         self.running = True
+        self.recording = False
+        self.process = None
+        self.writer = None
         self.buffer = []
         self.buf_lock = threading.Lock()
         self.frame_lock = threading.Lock()
+
 
     def start(self):
         self.cap = cv2.VideoCapture(self.cam_index, cv2.CAP_DSHOW)
@@ -49,7 +57,49 @@ class CameraStream:
                 
             with self.frame_lock:    
                 self.frame = delayed_frame
-            
+
+                # if self.recording and self.writer is not None:
+                #     self.writer.write(delayed_frame)
+                
+                if self.recording and self.process is not None:
+                    self.process.stdin.write(delayed_frame.astype(np.uint8).tobytes())
+
+
+    def start_recording(self, filename):
+        if self.recording:
+            return 
+        
+        # fourcc = cv2.VideoWriter_fourcc(*"MJPG")
+        # self.writer = cv2.VideoWriter(filename, fourcc, self.fps,(
+        #     int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH)),
+        #     int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        # ))
+        
+        
+        self.process = (
+            ffmpeg.input('pipe:', format='rawvideo', pix_fmt='bgr24', 
+                         s='{}x{}'.format(self.width, self.height), use_wallclock_as_timestamps=1)
+                  .output(filename, fps_mode='vfr', **{'b:v': '3000k'})
+                  .overwrite_output()
+                  .run_async(pipe_stdin=True)
+        )
+        
+        self.recording = True
+
+    def stop_recording(self):
+        if not self.recording:
+            return
+        
+        self.recording = False
+        self.process.stdin.close()
+        self.process.wait()
+        self.process = None
+
+        # with self.frame_lock:
+        #     if self.writer is not None:
+        #         self.writer.release()
+        #         self.writer = None
+
     def get_frame(self):
         with self.frame_lock:
             return self.frame if self.frame is not None else None

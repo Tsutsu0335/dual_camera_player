@@ -1,15 +1,18 @@
 
 import sys
+import os
+import time
+import shutil
 
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QPushButton, QWidget, QLineEdit,
     QVBoxLayout, QHBoxLayout, QSlider, QLabel, QComboBox, QCheckBox,
-    QTabWidget
+    QTabWidget, QFileDialog
 )
 from PyQt6.QtGui import QAction, QPainter, QImage, QColor
 from PyQt6.QtCore import QTimer, Qt
 
-from flowlayout import FlowLayout, remove_layout, clear_layout
+from flowlayout import FlowLayout, clear_layout
 from camera import CameraStream, detect_available_cameras
 
 import cv2
@@ -54,12 +57,18 @@ class VideosWidget(QWidget):
         self.cam_indexes = cam_indexes
         self.video_widgets = []
         self.setting_window = None
+        self.recording = False
+        self.filenames = []
+        
+        self.tmp_dir = ".\.tmp_videos"
 
         self.reload()
 
         self.setLayout(self.layout)
 
     def reload(self):
+        self.stop_record()
+
         for video_widget in self.video_widgets:
             self.layout.removeWidget(video_widget)
             video_widget.close()
@@ -83,6 +92,40 @@ class VideosWidget(QWidget):
         )
         self.setting_window.show()
 
+    def start_record(self):
+        if self.recording:
+            print("recording is already running")
+            return
+        
+        
+        self.filenames = []
+        try:
+            os.mkdir(".\.tmp_videos")
+        except:
+            pass
+
+        now_time = int(time.time())
+
+        for i, video_widget in enumerate(self.video_widgets):
+            filename = f"record_{now_time}_camera{i}.avi"
+            video_widget.start_record(os.path.join(self.tmp_dir, filename))
+            self.filenames.append(filename)
+        
+        self.recording = True
+
+    def stop_record(self):
+        if not self.recording:
+            return
+                
+        for i, video_widget in enumerate(self.video_widgets):
+            video_widget.stop_record()
+
+        print("hey")
+        dst_dir = QFileDialog.getExistingDirectory()
+        for src_name in self.filenames:
+            shutil.move(os.path.join(self.tmp_dir, src_name), os.path.join(dst_dir, src_name))
+
+        self.recording = False
 
 class VideoWidget(QWidget):
     def __init__(self, cam_index: int, width=640, height=360, resolution=(1280, 720)):
@@ -129,6 +172,12 @@ class VideoWidget(QWidget):
     def set_cross_y(self, y):
         self.cross_y = y * 0.01
 
+    def start_record(self, filename):
+        self.camera_stream.start_recording(filename)
+    
+    def stop_record(self):
+        self.camera_stream.stop_recording()
+
 
     def cv_to_qimage(self, frame):
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -162,9 +211,14 @@ class SettingWindow(QMainWindow):
         self.view_tab_widget.setLayout(self.view_tab_layout)
         self.central_widget.addTab(self.view_tab_widget, "View")
 
+        self.record_tab_widget = QWidget()
+        self.record_tab_layout = QVBoxLayout()
+        self.record_tab_widget.setLayout(self.record_tab_layout)
+        self.central_widget.addTab(self.record_tab_widget, "Record")
+
         self.camera_num_combo = QComboBox()
 
-        self.tab_layouts = [self.camera_tab_layout, self.view_tab_layout]
+        self.tab_layouts = [self.camera_tab_layout, self.view_tab_layout, self.record_tab_layout]
         self.camera_idx_combos = []
         self.width_sliders = []
         self.delay_slider = QSlider(Qt.Orientation.Horizontal)
@@ -288,6 +342,18 @@ class SettingWindow(QMainWindow):
 
 
 
+
+        record_start_button = QPushButton("Start")
+        record_start_button.clicked.connect(self.start_record)
+        self.record_tab_layout.addWidget(record_start_button)
+        record_stop_button = QPushButton("Stop")
+        record_stop_button.clicked.connect(self.stop_record)
+        self.record_tab_layout.addWidget(record_stop_button)
+        test_button = QPushButton("Test")
+        test_button.clicked.connect(self.test)
+        self.record_tab_layout.addWidget(test_button)
+
+
     def update_camera_num(self):
         self.cam_indexes = [int(camera_combo.currentText()) for camera_combo in self.camera_idx_combos]
         camera_num = int(self.camera_num_combo.currentText())
@@ -346,7 +412,23 @@ class SettingWindow(QMainWindow):
         for video_widget in self.videos_widget.video_widgets:
             video_widget.set_cross_flag(self.cross_checkbox.isChecked())
 
+    def start_record(self):
+        self.videos_widget.start_record()
+    
+    def stop_record(self):
+        self.videos_widget.stop_record()
+
+    def test(self):
+        name = QFileDialog.getExistingDirectory()
+        print(name)
+
 if __name__ == "__main__":
+    try:
+        os.mkdir("./.tmp_videos")
+    except:
+        pass
+
+    
     app = QApplication(sys.argv)
     main_win = MainWindow()
     main_win.show()
