@@ -1,3 +1,4 @@
+ffmpeg-python==0.2.0
 numpy==2.2.6
 opencv-python==4.11.0.86
 PyQt6==6.9.0
