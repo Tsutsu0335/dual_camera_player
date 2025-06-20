@@ -17,6 +17,8 @@ from camera import CameraStream, detect_available_cameras
 
 import cv2
 
+tmp_dir = "./.tmp_videos"
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -60,7 +62,7 @@ class VideosWidget(QWidget):
         self.recording = False
         self.filenames = []
         
-        self.tmp_dir = ".\.tmp_videos"
+        self.tmp_dir = tmp_dir
 
         self.reload()
 
@@ -100,7 +102,7 @@ class VideosWidget(QWidget):
         
         self.filenames = []
         try:
-            os.mkdir(".\.tmp_videos")
+            os.mkdir(tmp_dir)
         except:
             pass
 
@@ -120,7 +122,6 @@ class VideosWidget(QWidget):
         for i, video_widget in enumerate(self.video_widgets):
             video_widget.stop_record()
 
-        print("hey")
         dst_dir = QFileDialog.getExistingDirectory()
         for src_name in self.filenames:
             shutil.move(os.path.join(self.tmp_dir, src_name), os.path.join(dst_dir, src_name))
@@ -241,9 +242,6 @@ class SettingWindow(QMainWindow):
         #--- camera num combo ---
         camera_num_layout = QHBoxLayout()
         self.camera_num_combo = QComboBox()
-        print(self.cam_indexes)
-        print(self.available_cameras)
-        print([str(i) for i in range(1, len(self.available_cameras)+1)])
         self.camera_num_combo.addItems([str(i) for i in range(1, len(self.available_cameras)+1)])
         self.camera_num_combo.setCurrentIndex(len(self.cam_indexes) - 1)
         
@@ -353,6 +351,10 @@ class SettingWindow(QMainWindow):
         test_button.clicked.connect(self.test)
         self.record_tab_layout.addWidget(test_button)
 
+        self.camera_tab_layout.addStretch()
+        self.view_tab_layout.addStretch()
+        self.record_tab_layout.addStretch()
+
 
     def update_camera_num(self):
         self.cam_indexes = [int(camera_combo.currentText()) for camera_combo in self.camera_idx_combos]
@@ -424,7 +426,7 @@ class SettingWindow(QMainWindow):
 
 if __name__ == "__main__":
     try:
-        os.mkdir("./.tmp_videos")
+        os.mkdir(tmp_dir)
     except:
         pass
 
