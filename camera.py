@@ -32,7 +32,7 @@ class CameraStream:
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
         self.cap.set(cv2.CAP_PROP_FPS, self.fps)
 
-        print(f"fps: {self.cap.get(cv2.CAP_PROP_FPS)}, width: {self.cap.get(cv2.CAP_PROP_FRAME_WIDTH)}, height: {self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT)}")
+        print(f"camera{self.cam_index}:  fps: {self.cap.get(cv2.CAP_PROP_FPS)}, width: {self.cap.get(cv2.CAP_PROP_FRAME_WIDTH)}, height: {self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT)}")
         
         self.thread = threading.Thread(target=self.loop, daemon=True)
         self.thread.start()
@@ -57,9 +57,6 @@ class CameraStream:
                 
             with self.frame_lock:    
                 self.frame = delayed_frame
-
-                # if self.recording and self.writer is not None:
-                #     self.writer.write(delayed_frame)
                 
                 if self.recording and self.process is not None:
                     self.process.stdin.write(delayed_frame.astype(np.uint8).tobytes())
@@ -68,13 +65,6 @@ class CameraStream:
     def start_recording(self, filename):
         if self.recording:
             return 
-        
-        # fourcc = cv2.VideoWriter_fourcc(*"MJPG")
-        # self.writer = cv2.VideoWriter(filename, fourcc, self.fps,(
-        #     int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH)),
-        #     int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        # ))
-        
         
         self.process = (
             ffmpeg.input('pipe:', format='rawvideo', pix_fmt='bgr24', 
@@ -95,18 +85,13 @@ class CameraStream:
         self.process.wait()
         self.process = None
 
-        # with self.frame_lock:
-        #     if self.writer is not None:
-        #         self.writer.release()
-        #         self.writer = None
-
     def get_frame(self):
         with self.frame_lock:
             return self.frame if self.frame is not None else None
 
     def set_delay(self, delay_sec):
         with self.buf_lock:
-            self.delay_sec = delay_sec
+            self.delay_sec = min(max(0, delay_sec), self.delay_sec_max - 1)
     
     def release(self):
         self.running = False

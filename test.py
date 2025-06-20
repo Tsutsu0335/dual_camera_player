@@ -31,19 +31,33 @@ class MainWindow(QMainWindow):
 
         #--- menu bar (status bar) ---
         self.statusbar = self.statusBar()
+        self.statusbar.showMessage(f"Delay: {self.central_widget.delay_sec}sec, Recording: {self.central_widget.recording}")
+
         self.menubar = self.menuBar()
         self.menubar.setNativeMenuBar(False)
 
         self.menu_file = self.menubar.addMenu("File")
         self.menu_file_setting = QAction("Setting", self)
         self.menu_file.addAction(self.menu_file_setting)
-        self.menu_file_setting.setStatusTip("Open settings window")
         self.menu_file_setting.triggered.connect(self.central_widget.open_setting_window)
         #--- menu bar (status bar) ---
 
         self.timer = QTimer()
         self.timer.timeout.connect(self.update)
         self.timer.start(16)
+
+    def keyPressEvent(self, event):
+        if event.key() == ord("1"):
+            self.central_widget.update_delay(self.central_widget.delay_sec - 1)
+        
+        if event.key() == ord("2"):
+            self.central_widget.update_delay(self.central_widget.delay_sec + 1)
+
+        if event.key() == ord("3"):
+            self.central_widget.toggle_record()
+        
+        self.statusbar.showMessage(f"Delay: {self.central_widget.delay_sec}sec, Recording: {self.central_widget.recording}")
+
     
     def closeEvent(self, _):
         if self.central_widget.setting_window is not None and self.central_widget.setting_window.isVisible():
@@ -61,6 +75,7 @@ class VideosWidget(QWidget):
         self.setting_window = None
         self.recording = False
         self.filenames = []
+        self.delay_sec = 0
         
         self.tmp_dir = tmp_dir
 
@@ -128,13 +143,25 @@ class VideosWidget(QWidget):
 
         self.recording = False
 
+    def update_delay(self, delay_sec):
+        self.delay_sec = min(max(0, delay_sec), self.video_widgets[0].delay_sec_max)
+        for video_widget in self.video_widgets:
+            video_widget.set_delay_sec(self.delay_sec)
+
+    def toggle_record(self):
+        if self.recording:
+            self.stop_record()
+        else:
+            self.start_record()
+
 class VideoWidget(QWidget):
-    def __init__(self, cam_index: int, width=640, height=360, resolution=(1280, 720)):
+    def __init__(self, cam_index: int, width=640, height=360, delay_sec_max=45, resolution=(1280, 720)):
         super().__init__()
-        self.camera_stream = CameraStream(cam_index, height=resolution[1], width=resolution[0])
+        self.camera_stream = CameraStream(cam_index, height=resolution[1], width=resolution[0], delay_sec_max=delay_sec_max)
         self.camera_stream.start()
         self.width = width
         self.height = height
+        self.delay_sec_max = delay_sec_max
         self.setMinimumSize(self.width, self.height)
         self.cross_flag = False
         self.cross_x = 0.5
@@ -278,7 +305,7 @@ class SettingWindow(QMainWindow):
         delay_layout = QHBoxLayout()
         self.delay_slider = QSlider(Qt.Orientation.Horizontal)
         self.delay_slider.setRange(0, 40)
-        self.delay_slider.setValue(0)
+        self.delay_slider.setValue(self.videos_widget.delay_sec)
         self.delay_slider.valueChanged.connect(self.update_delay_slider_value)
         self.delay_textbox = QLineEdit(str(self.delay_slider.value()))
         self.delay_textbox.setFixedWidth(50)
@@ -378,8 +405,7 @@ class SettingWindow(QMainWindow):
 
     def update_delay_slider_value(self, delay_sec):
         self.delay_textbox.setText(str(delay_sec))
-        for video_widget in self.videos_widget.video_widgets:
-            video_widget.set_delay_sec(int(delay_sec))
+        self.videos_widget.update_delay(int(delay_sec))
 
     def update_cross_x_slider_values(self):
         if len(self.cross_x_sliders) != len(self.videos_widget.video_widgets):
