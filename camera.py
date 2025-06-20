@@ -23,7 +23,7 @@ class CameraStream:
         self.buffer = []
         self.buf_lock = threading.Lock()
         self.frame_lock = threading.Lock()
-
+        self.process_lock = threading.Lock()
 
     def start(self):
         self.cap = cv2.VideoCapture(self.cam_index, cv2.CAP_DSHOW)
@@ -58,6 +58,7 @@ class CameraStream:
             with self.frame_lock:    
                 self.frame = delayed_frame
                 
+            with self.process_lock:
                 if self.recording and self.process is not None:
                     self.process.stdin.write(delayed_frame.astype(np.uint8).tobytes())
 
@@ -81,9 +82,10 @@ class CameraStream:
             return
         
         self.recording = False
-        self.process.stdin.close()
-        self.process.wait()
-        self.process = None
+        with self.process_lock:    
+            self.process.stdin.close()
+            self.process.wait()
+            self.process = None
 
     def get_frame(self):
         with self.frame_lock:
