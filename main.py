@@ -373,9 +373,6 @@ class SettingWindow(QMainWindow):
         record_stop_button = QPushButton("Stop")
         record_stop_button.clicked.connect(self.stop_record)
         self.record_tab_layout.addWidget(record_stop_button)
-        test_button = QPushButton("Test")
-        test_button.clicked.connect(self.test)
-        self.record_tab_layout.addWidget(test_button)
 
         self.camera_tab_layout.addStretch()
         self.view_tab_layout.addStretch()
@@ -445,9 +442,6 @@ class SettingWindow(QMainWindow):
     def stop_record(self):
         self.videos_widget.stop_record()
 
-    def test(self):
-        name = QFileDialog.getExistingDirectory()
-        print(name)
 
 if __name__ == "__main__":
     try:
