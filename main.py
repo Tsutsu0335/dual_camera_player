@@ -1,289 +1,462 @@
 import sys
 import os
-import cv2
-import threading
 import time
-from PyQt5.QtWidgets import (
-    QApplication, QWidget, QSlider, QLabel, QHBoxLayout,
-    QVBoxLayout, QHBoxLayout, QComboBox, QPushButton, QLineEdit
+import shutil
+
+from PyQt6.QtWidgets import (
+    QApplication, QMainWindow, QPushButton, QWidget, QLineEdit,
+    QVBoxLayout, QHBoxLayout, QSlider, QLabel, QComboBox, QCheckBox,
+    QTabWidget, QFileDialog
 )
-from PyQt5.QtCore import Qt, QTimer
-from PyQt5.QtGui import QPainter, QImage
+from PyQt6.QtGui import QAction, QPainter, QImage, QColor
+from PyQt6.QtCore import QTimer, Qt
 
+from flowlayout import FlowLayout, clear_layout
+from camera import CameraStream, detect_available_cameras
 
-class CameraStream:
-    def __init__(self, cam_index, delay_sec=0):
-        self.cap = cv2.VideoCapture(cam_index)
-        self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-        self.fps = 60
-        self.cap.set(cv2.CAP_PROP_FPS, self.fps)
+import cv2
 
-        self.cam_index = cam_index
-        self.delay_sec = delay_sec
-        self.buffer = []
-        self.running = True
-        self.frame = None
-        self.delay_frame = None
-        self.recording = False
-        self.writer = None
-        self.lock = threading.Lock()
-        self.thread = threading.Thread(target=self.update, daemon=True)
-        self.thread.start()
+tmp_dir = "./.tmp_videos"
 
-    def update(self):
-        while self.running:
-            ret, frame = self.cap.read()
-            if not ret:
-                continue
-            timestamp = time.time()
-            with self.lock:
-                self.buffer.append((timestamp, frame))
-                while self.buffer and (timestamp - self.buffer[0][0]) > self.delay_sec:
-                    self.buffer.pop(0)
-                self.frame = frame
-                self.delay_frame = self.buffer[0][1] if self.buffer else frame
-            
-                if self.recording and self.writer is not None:
-                    self.writer.write(frame)
+class MainWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Camera Player")
 
+        #--- central widget ---
+        self.central_widget = VideosWidget([0, 1])
+        self.setCentralWidget(self.central_widget)
+        #--- central widget ---
 
-            time.sleep(1 / self.fps)
+        #--- menu bar (status bar) ---
+        self.statusbar = self.statusBar()
+        self.statusbar.showMessage(f"Delay: {self.central_widget.delay_sec}sec, Recording: {self.central_widget.recording}")
 
-    def get_frame(self):
-        with self.lock:
-            return self.frame.copy() if self.frame is not None else None
+        self.menubar = self.menuBar()
+        self.menubar.setNativeMenuBar(False)
 
-    def get_delay_frame(self):
-        with self.lock:
-            return self.delay_frame.copy() if self.delay_frame is not None else None
+        self.menu_file = self.menubar.addMenu("File")
+        self.menu_file_setting = QAction("Setting", self)
+        self.menu_file.addAction(self.menu_file_setting)
+        self.menu_file_setting.triggered.connect(self.central_widget.open_setting_window)
+        #--- menu bar (status bar) ---
 
-    def set_delay(self, delay_sec):
-        with self.lock:
-            self.delay_sec = delay_sec
+        self.timer = QTimer()
+        self.timer.timeout.connect(self.update)
+        self.timer.start(16)
+
+    def keyPressEvent(self, event):
+        if event.key() == ord("1"):
+            self.central_widget.update_delay(self.central_widget.delay_sec - 1)
+        
+        if event.key() == ord("2"):
+            self.central_widget.update_delay(self.central_widget.delay_sec + 1)
+
+        if event.key() == ord("3"):
+            self.central_widget.toggle_record()
+        
+        self.statusbar.showMessage(f"Delay: {self.central_widget.delay_sec}sec, Recording: {self.central_widget.recording}")
+
     
-    def start_recording(self, output_path):
-        fourcc = cv2.VideoWriter_fourcc(*"MJPG")
-        self.writer = cv2.VideoWriter(output_path, fourcc, self.fps / 2,(
-            int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH)),
-            int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        ))
+    def closeEvent(self, _):
+        if self.central_widget.setting_window is not None and self.central_widget.setting_window.isVisible():
+            self.central_widget.setting_window.close()
+        return super().closeEvent(_)
+        
+class VideosWidget(QWidget):
+    def __init__(self, cam_indexes: list):
+        super().__init__()
+        self.available_cameras = detect_available_cameras()
+
+        self.layout = FlowLayout()
+        self.cam_indexes = cam_indexes
+        self.video_widgets = []
+        self.setting_window = None
+        self.recording = False
+        self.filenames = []
+        self.delay_sec = 0
+        
+        self.tmp_dir = tmp_dir
+
+        self.reload()
+
+        self.setLayout(self.layout)
+
+    def reload(self):
+        self.stop_record()
+
+        for video_widget in self.video_widgets:
+            self.layout.removeWidget(video_widget)
+            video_widget.close()
+            video_widget.deleteLater()
+
+        self.video_widgets = []
+
+        for cam_index in self.cam_indexes:
+            self.video_widgets.append(VideoWidget(cam_index))
+            self.layout.addWidget(self.video_widgets[-1])
+
+
+    def set_cam_indexes(self, cam_indexes):
+        self.cam_indexes = cam_indexes
+
+    def open_setting_window(self):
+        self.setting_window = SettingWindow(
+            cam_indexes=self.cam_indexes,
+            videos_widget=self,
+            available_cameras=self.available_cameras
+        )
+        self.setting_window.show()
+
+    def start_record(self):
+        if self.recording:
+            print("recording is already running")
+            return
+        
+        
+        self.filenames = []
+        try:
+            os.mkdir(tmp_dir)
+        except:
+            pass
+
+        now_time = int(time.time())
+
+        for i, video_widget in enumerate(self.video_widgets):
+            filename = f"record_{now_time}_camera{i}.avi"
+            video_widget.start_record(os.path.join(self.tmp_dir, filename))
+            self.filenames.append(filename)
+        
         self.recording = True
-    
-    def stop_recording(self):
+
+    def stop_record(self):
+        if not self.recording:
+            return
+                
+        for i, video_widget in enumerate(self.video_widgets):
+            video_widget.stop_record()
+
+        dst_dir = QFileDialog.getExistingDirectory()
+        for src_name in self.filenames:
+            shutil.move(os.path.join(self.tmp_dir, src_name), os.path.join(dst_dir, src_name))
+
         self.recording = False
-        with self.lock:
-            if self.writer is not None:
-                self.writer.release()
-                self.writer = None
 
-    def release(self):
-        self.running = False
-        self.thread.join()
-        self.cap.release()
+    def update_delay(self, delay_sec):
+        self.delay_sec = min(max(0, delay_sec), self.video_widgets[0].delay_sec_max)
+        for video_widget in self.video_widgets:
+            video_widget.set_delay_sec(self.delay_sec)
 
+    def toggle_record(self):
+        if self.recording:
+            self.stop_record()
+        else:
+            self.start_record()
 
 class VideoWidget(QWidget):
-    def __init__(self, cameras):
+    def __init__(self, cam_index: int, width=640, height=360, delay_sec_max=45, resolution=(1280, 720)):
         super().__init__()
-        self.cameras = cameras
-        # 個別の高さを保持（デフォルト480で初期化）
-        self.video_widths = [640 for _ in cameras]
-        self.video_heights = [0 for _ in cameras]
-        self.columns = 2  # 横に並べる台数
+        self.camera_stream = CameraStream(cam_index, height=resolution[1], width=resolution[0], delay_sec_max=delay_sec_max)
+        self.camera_stream.start()
+        self.width = width
+        self.height = height
+        self.delay_sec_max = delay_sec_max
+        self.setMinimumSize(self.width, self.height)
+        self.cross_flag = False
+        self.cross_x = 0.5
+        self.cross_y = 0.5
 
     def paintEvent(self, event):
         painter = QPainter(self)
-        spacing = 10  # 映像同士の間隔
-        y = [0 for _ in range(self.columns)]
+        frame = self.camera_stream.get_frame()
+        if frame is None:
+            return
+        
+        resized = cv2.resize(frame, (self.width, self.height))
+        img = self.cv_to_qimage(resized)
 
-        for i, cam in enumerate(self.cameras):
-            frame = cam.get_frame()
-            if frame is None:
-                continue
+        painter.drawImage(0, 0, img)
 
-            w = self.video_widths[i]
-            h = int(w * frame.shape[0] / frame.shape[1])
-            resized = cv2.resize(frame, (w, h))
-            img = self.cv_to_qimage(resized)
+        if self.cross_flag:
+            painter.setPen(QColor(255,0,0))
+            painter.drawLine(0, int(self.height * self.cross_y), self.width, int(self.height * self.cross_y))
+            painter.drawLine(int(self.width * self.cross_x), 0, int(self.width * self.cross_x), self.height)
 
-            # 行と列を計算（2列配置）
-            row = i // self.columns
-            col = i % self.columns
+    def set_delay_sec(self, sec: int):
+        self.camera_stream.set_delay(sec)
 
-            x = 0
+    def set_video_widget_width(self, width):
+        self.width = width
+        self.height = int(width * 9 / 16)
+        self.setMinimumSize(self.width, self.height)
+    
+    def set_cross_flag(self, f: bool):
+        self.cross_flag = f
+    
+    def set_cross_x(self, x):
+        self.cross_x = x * 0.01
+    
+    def set_cross_y(self, y):
+        self.cross_y = y * 0.01
 
-            if col == self.columns - 1:
-                x = x + self.video_widths[i-1] + spacing
-
-            painter.drawImage(x, y[col], img)
-            
-            y[col] = y[col] + h + spacing
+    def start_record(self, filename):
+        self.camera_stream.start_recording(filename)
+    
+    def stop_record(self):
+        self.camera_stream.stop_recording()
 
 
     def cv_to_qimage(self, frame):
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         h, w, ch = rgb.shape
-        return QImage(rgb.data, w, h, ch * w, QImage.Format_RGB888)
+        return QImage(rgb.data, w, h, ch * w, QImage.Format.Format_RGB888)
+    
+    def closeEvent(self, _):
+        self.camera_stream.release()
+        return super().closeEvent(_)
 
-    # 複数の高さを一括でセット
-    def set_video_widths(self, widths):
-        self.video_widths = widths
-        self.update()
 
-
-class ControlWindow(QWidget):
-    def __init__(self, cameras, video_widget, apply_camera_change_callback, open_control_window_callback, toggle_recording_callback):
+class SettingWindow(QMainWindow):
+    def __init__(self, cam_indexes, videos_widget, available_cameras):
         super().__init__()
-        self.setWindowTitle("Controls")
-        self.cameras = cameras
-        self.video_widget = video_widget
-        self.apply_camera_change_callback = apply_camera_change_callback
-        self.open_control_window_callback = open_control_window_callback
-        self.toggle_recording_callback = toggle_recording_callback
+        self.setWindowTitle("Setting")
+        self.resize(600, 500)
+        self.cam_indexes = cam_indexes
+        self.videos_widget = videos_widget
+        self.available_cameras = available_cameras
 
-        self.num_cameras = len(cameras)
-        self.camera_selectors = []
+        self.central_widget = QTabWidget()
+        self.setCentralWidget(self.central_widget)
+        
+        self.camera_tab_widget = QWidget()
+        self.camera_tab_layout = QVBoxLayout()
+        self.camera_tab_widget.setLayout(self.camera_tab_layout)
+        self.central_widget.addTab(self.camera_tab_widget, "Camera")
+        
+        self.view_tab_widget = QWidget()
+        self.view_tab_layout = QVBoxLayout()
+        self.view_tab_widget.setLayout(self.view_tab_layout)
+        self.central_widget.addTab(self.view_tab_widget, "View")
+
+        self.record_tab_widget = QWidget()
+        self.record_tab_layout = QVBoxLayout()
+        self.record_tab_widget.setLayout(self.record_tab_layout)
+        self.central_widget.addTab(self.record_tab_widget, "Record")
+
+        self.camera_num_combo = QComboBox()
+
+        self.tab_layouts = [self.camera_tab_layout, self.view_tab_layout, self.record_tab_layout]
+        self.camera_idx_combos = []
         self.width_sliders = []
+        self.delay_slider = QSlider(Qt.Orientation.Horizontal)
+        self.delay_textbox = QLineEdit()
+        self.cross_x_sliders = []
+        self.cross_y_sliders = []
 
-        layout = QVBoxLayout()
+        self.reload()
+        
+        
+    def reload(self):
+        for layout in self.tab_layouts:
+            clear_layout(layout)
 
-        self.combo_layout = QHBoxLayout()
-        for i in range(self.num_cameras):
-            combo = QComboBox()
-            combo.addItems([str(i) for i in range(self.num_cameras)])
-            combo.setCurrentIndex(i)
-            self.combo_layout.addWidget(QLabel(f"Camera {i+1}:"))
-            self.combo_layout.addWidget(combo)
-            self.camera_selectors.append(combo)
-        self.button_apply = QPushButton("Apply")
-        self.button_apply.clicked.connect(self.apply_camera_change_callback)
-        self.combo_layout.addWidget(self.button_apply)
-        layout.addLayout(self.combo_layout)
+        self.camera_idx_combos = []
+        self.width_sliders = []
+        self.cross_x_sliders = []
+        self.cross_y_sliders = []
 
-        for i in range(self.num_cameras):
-            slider = QSlider(Qt.Horizontal)
-            slider.setRange(480, 1920)
+        #--- camera num combo ---
+        camera_num_layout = QHBoxLayout()
+        self.camera_num_combo = QComboBox()
+        self.camera_num_combo.addItems([str(i) for i in range(1, len(self.available_cameras)+1)])
+        self.camera_num_combo.setCurrentIndex(len(self.cam_indexes) - 1)
+        
+        camera_num_layout.addWidget(QLabel(f"Number of cameras:"))
+        camera_num_layout.addWidget(self.camera_num_combo)
+
+        self.camera_tab_layout.addLayout(camera_num_layout)
+        #--- camera num combo ---
+
+
+        #--- camera index combo ---
+        camera_idx_layout = QHBoxLayout()
+        camera_idx_layout.addWidget(QLabel("Camera ID: "))
+        for i, cam_idx in enumerate(self.cam_indexes):
+            camera_idx_combo = QComboBox()
+            camera_idx_combo.addItems(self.available_cameras)
+            camera_idx_combo.setCurrentIndex(cam_idx)
+            camera_idx_layout.addWidget(QLabel(f"Camera {i}"))
+            camera_idx_layout.addWidget(camera_idx_combo)
+
+            self.camera_idx_combos.append(camera_idx_combo)
+
+        self.camera_tab_layout.addLayout(camera_idx_layout)
+
+        #--- camera index combo ---
+
+
+        camera_conf_apply_button = QPushButton("Apply")
+        camera_conf_apply_button.clicked.connect(self.update_camera_num)
+        self.camera_tab_layout.addWidget(camera_conf_apply_button)
+        
+
+        #--- camera delay slider ---
+        delay_layout = QHBoxLayout()
+        self.delay_slider = QSlider(Qt.Orientation.Horizontal)
+        self.delay_slider.setRange(0, 40)
+        self.delay_slider.setValue(self.videos_widget.delay_sec)
+        self.delay_slider.valueChanged.connect(self.update_delay_slider_value)
+        self.delay_textbox = QLineEdit(str(self.delay_slider.value()))
+        self.delay_textbox.setFixedWidth(50)
+        self.delay_textbox.textEdited.connect(self.update_delay_textbox_value)
+        delay_layout.addWidget(QLabel(f"Camera delay(sec)"))
+        delay_layout.addWidget(self.delay_slider)
+        delay_layout.addWidget(self.delay_textbox)
+        self.view_tab_layout.addLayout(delay_layout)
+        #--- camera delay slider ---
+        
+
+        #--- camera size slider ---
+        for i in self.cam_indexes:
+            slider_layout = QHBoxLayout()
+            slider = QSlider(Qt.Orientation.Horizontal)
+            slider.setRange(320, 1920)
             slider.setValue(640)
-            slider.valueChanged.connect(self.update_slider_values)
-            layout.addWidget(QLabel(f"Camera {i+1} Width"))
-            layout.addWidget(slider)
+            slider.valueChanged.connect(self.update_width_slider_values)
+            slider_layout.addWidget(QLabel(f"Camera {i}"))
+            slider_layout.addWidget(slider)
             self.width_sliders.append(slider)
 
-        delay_layout = QHBoxLayout()
-        self.slider_delay = QSlider(Qt.Horizontal)
-        self.slider_delay.setRange(0, 400)
-        self.slider_delay.setValue(0)
-        self.slider_delay.valueChanged.connect(self.update_slider_delay)
-        self.input_delay = QLineEdit(str(self.slider_delay.value()))
-        self.input_delay.setFixedWidth(50)
-        self.input_delay.textEdited.connect(self.update_input_delay_values)
-        layout.addWidget(QLabel("Common Delay (100 msec)"))
-        delay_layout.addWidget(self.slider_delay)
-        delay_layout.addWidget(self.input_delay)
-        layout.addLayout(delay_layout)
+            self.view_tab_layout.addLayout(slider_layout)
+        #--- camera size slider ---
 
-        layout.addWidget(QLabel("Recording"))
-        self.record_button = QPushButton("Start")
-        self.record_button.clicked.connect(self.toggle_recording_callback)
-        layout.addWidget(self.record_button)
 
-        self.setLayout(layout)
-
-    def update_slider_values(self):
-        widths = [s.value() for s in self.width_sliders]
-        self.video_widget.set_video_widths(widths)
+        #--- display cross ---
+        self.cross_layout = QHBoxLayout()
+        self.cross_checkbox = QCheckBox("View cross")
+        self.cross_checkbox.setChecked(False)
+        self.cross_checkbox.toggled.connect(self.update_cross_checkbox)
         
-    def update_input_delay_values(self):
-        self.slider_delay.setValue(int(self.input_delay.text()))
+        self.cross_layout.addWidget(self.cross_checkbox)
+        self.view_tab_layout.addLayout(self.cross_layout)
+        #--- display cross ---
 
-    def update_slider_delay(self, val):
-        delay = self.slider_delay.value() / 10.0
-        for cam in self.cameras:
-            cam.set_delay(delay)
-        self.input_delay.setText(str(val))
+        #--- cross height slider ---
+        for i in self.cam_indexes:
+            slider_layout = QHBoxLayout()
+
+            slider_x = QSlider(Qt.Orientation.Horizontal)
+            slider_x.setRange(0, 100)
+            slider_x.setValue(50)
+            slider_x.valueChanged.connect(self.update_cross_x_slider_values)
+
+            slider_y = QSlider(Qt.Orientation.Horizontal)
+            slider_y.setRange(0, 100)
+            slider_y.setValue(50)
+            slider_y.valueChanged.connect(self.update_cross_y_slider_values)
+
+            slider_layout.addWidget(QLabel(f"Camera {i}"))
+            slider_layout.addWidget(slider_x)
+            slider_layout.addWidget(slider_y)
+            self.cross_x_sliders.append(slider_x)
+            self.cross_y_sliders.append(slider_y)
+
+            self.view_tab_layout.addLayout(slider_layout)
+        #--- cross height slider ---
 
 
-    def get_selected_camera_indices(self):
-        return [int(cb.currentText()) for cb in self.camera_selectors]
-    
-    def closeEvent(self, _):
-        self.open_control_window_callback()
 
 
-class MainWindow(QWidget):
-    def __init__(self):
-        super().__init__()
-        self.setWindowTitle("Multi-Camera Viewer")
-        self.resize(800, 600)
-        self.running = True
-        self.recording = False
+        record_start_button = QPushButton("Start")
+        record_start_button.clicked.connect(self.start_record)
+        self.record_tab_layout.addWidget(record_start_button)
+        record_stop_button = QPushButton("Stop")
+        record_stop_button.clicked.connect(self.stop_record)
+        self.record_tab_layout.addWidget(record_stop_button)
+        test_button = QPushButton("Test")
+        test_button.clicked.connect(self.test)
+        self.record_tab_layout.addWidget(test_button)
 
-        # 初期カメラ構成
-        self.cameras = [CameraStream(i) for i in range(2)]
-        self.video_widget = VideoWidget(self.cameras)
+        self.camera_tab_layout.addStretch()
+        self.view_tab_layout.addStretch()
+        self.record_tab_layout.addStretch()
 
-        layout = QVBoxLayout()
-        layout.addWidget(self.video_widget)
-        self.setLayout(layout)
 
-        # コントロールウィンドウを生成
-        self.open_control_window()
-
-        self.timer = QTimer()
-        self.timer.timeout.connect(self.video_widget.update)
-        self.timer.start(16)
-
-    def change_cameras(self):
-        indices = self.control_window.get_selected_camera_indices()
-        for cam in self.cameras:
-            cam.release()
-        self.cameras = [CameraStream(i) for i in indices]
-        self.video_widget.cameras = self.cameras
-        self.control_window.cameras = self.cameras  # コントロール側にも更新
-
-    def toggle_recording(self):
-        if not self.recording:
-            timestamp = int(time.time())
-            os.mkdir(f"videos/{timestamp}")
-            for i, cam in enumerate(self.cameras):
-                filename = f"videos/{timestamp}/record_{timestamp}_camera_{i}.avi"
-                cam.start_recording(filename)
-            self.recording = True
-            self.control_window.record_button.setText("Stop")
+    def update_camera_num(self):
+        self.cam_indexes = [int(camera_combo.currentText()) for camera_combo in self.camera_idx_combos]
+        camera_num = int(self.camera_num_combo.currentText())
+        if len(self.cam_indexes) > camera_num:
+            self.cam_indexes = self.cam_indexes[:camera_num]
         
-        else:
-            for cam in self.cameras:
-                cam.stop_recording()
-            self.recording = False
-            self.control_window.record_button.setText("Start")
+        elif len(self.cam_indexes) < camera_num:
+            for i in self.available_cameras:
+                if int(i) not in self.cam_indexes:
+                    self.cam_indexes.append(int(i))
+
+                if len(self.cam_indexes) >= camera_num:
+                    break
             
+            self.cam_indexes = self.cam_indexes + ([0] * (camera_num - len(self.cam_indexes)))
 
-    def open_control_window(self):
-        if self.running:
-            self.control_window = ControlWindow(
-                self.cameras,
-                self.video_widget,
-                self.change_cameras,
-                self.open_control_window,
-                self.toggle_recording
-            )
-            self.control_window.show()
+        self.videos_widget.set_cam_indexes(self.cam_indexes)
+        self.videos_widget.reload()
+        self.reload()
 
-    def closeEvent(self, _):
-        self.running = False
-        if self.control_window.isVisible():
-            self.control_window.close()
-        return super().closeEvent(_)
+    def update_delay_slider_value(self, delay_sec):
+        self.delay_textbox.setText(str(delay_sec))
+        self.videos_widget.update_delay(int(delay_sec))
+
+    def update_cross_x_slider_values(self):
+        if len(self.cross_x_sliders) != len(self.videos_widget.video_widgets):
+            print("[!] update cross x slider value: out of range")
+            return
+        cross_x = [cross_slider.value() for cross_slider in self.cross_x_sliders]
+        for i, video_widget in enumerate(self.videos_widget.video_widgets):
+            video_widget.set_cross_x(cross_x[i])
+        
+    def update_cross_y_slider_values(self):
+        if len(self.cross_y_sliders) != len(self.videos_widget.video_widgets):
+            print(f"[!] update cross y slider value: out of range")
+            return
+        cross_y = [cross_slider.value() for cross_slider in self.cross_y_sliders]
+        for i, video_widget in enumerate(self.videos_widget.video_widgets):
+            video_widget.set_cross_y(cross_y[i])
+        
+        
+    def update_delay_textbox_value(self):
+        if self.delay_textbox.text() != "":
+            self.delay_slider.setValue(int(self.delay_textbox.text()))
+
+    def update_width_slider_values(self):
+        if len(self.width_sliders) != len(self.videos_widget.video_widgets):
+            print("[!] update width slider value: out of range")
+            return
+        widths = [width_slider.value() for width_slider in self.width_sliders]
+        for i, video_widget in enumerate(self.videos_widget.video_widgets):
+            video_widget.set_video_widget_width(widths[i])
+
+    def update_cross_checkbox(self):
+        for video_widget in self.videos_widget.video_widgets:
+            video_widget.set_cross_flag(self.cross_checkbox.isChecked())
+
+    def start_record(self):
+        self.videos_widget.start_record()
     
+    def stop_record(self):
+        self.videos_widget.stop_record()
+
+    def test(self):
+        name = QFileDialog.getExistingDirectory()
+        print(name)
+
 if __name__ == "__main__":
     try:
-        os.mkdir("./videos")
+        os.mkdir(tmp_dir)
     except:
         pass
 
+    
     app = QApplication(sys.argv)
-    w = MainWindow()
-    w.show()
-    sys.exit(app.exec_())
+    main_win = MainWindow()
+    main_win.show()
+    sys.exit(app.exec())
