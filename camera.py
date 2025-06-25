@@ -26,7 +26,7 @@ class CameraStream:
         self.process_lock = threading.Lock()
 
     def start(self):
-        self.cap = cv2.VideoCapture(self.cam_index, cv2.CAP_DSHOW)
+        self.cap = cv2.VideoCapture(self.cam_index)
         self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)

@@ -2,11 +2,13 @@ import sys
 import os
 import time
 import shutil
+import functools
+import math
 
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QPushButton, QWidget, QLineEdit,
     QVBoxLayout, QHBoxLayout, QSlider, QLabel, QComboBox, QCheckBox,
-    QTabWidget, QFileDialog
+    QTabWidget, QFileDialog, QGroupBox
 )
 from PyQt6.QtGui import QAction, QPainter, QImage, QColor
 from PyQt6.QtCore import QTimer, Qt
@@ -46,13 +48,14 @@ class MainWindow(QMainWindow):
         self.timer.start(16)
 
     def keyPressEvent(self, event):
-        if event.key() == ord("1"):
+        pressed_key = event.key()
+        if pressed_key == ord("1") or pressed_key == Qt.Key.Key_Left:
             self.central_widget.update_delay(self.central_widget.delay_sec - 1)
         
-        if event.key() == ord("2"):
+        if pressed_key == ord("2") or pressed_key == Qt.Key.Key_Right:
             self.central_widget.update_delay(self.central_widget.delay_sec + 1)
 
-        if event.key() == ord("3"):
+        if pressed_key == ord("3"):
             self.central_widget.toggle_record()
         
         self.statusbar.showMessage(f"Delay: {self.central_widget.delay_sec}sec, Recording: {self.central_widget.recording}")
@@ -165,6 +168,8 @@ class VideoWidget(QWidget):
         self.cross_flag = False
         self.cross_x = 0.5
         self.cross_y = 0.5
+        self.cross_deg = 0
+        self.rotate_flag = 0
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -173,23 +178,44 @@ class VideoWidget(QWidget):
             return
         
         resized = cv2.resize(frame, (self.width, self.height))
-        img = self.cv_to_qimage(resized)
+
+        rotated = resized
+        if self.rotate_flag == 1:
+            rotated = cv2.rotate(resized, cv2.ROTATE_90_CLOCKWISE)
+        elif self.rotate_flag == 2:
+            rotated = cv2.rotate(resized, cv2.ROTATE_180)
+        elif self.rotate_flag == 3:
+            rotated = cv2.rotate(resized, cv2.ROTATE_90_COUNTERCLOCKWISE)
+
+
+        img = self.cv_to_qimage(rotated)
 
         painter.drawImage(0, 0, img)
 
         if self.cross_flag:
             painter.setPen(QColor(255,0,0))
-            painter.drawLine(0, int(self.height * self.cross_y), self.width, int(self.height * self.cross_y))
-            painter.drawLine(int(self.width * self.cross_x), 0, int(self.width * self.cross_x), self.height)
+            
+            r = self.width * 1.5
+            cross_center = (int(self.width * self.cross_x), int(self.height * self.cross_y))
 
+            painter.drawLine(int(cross_center[0] - r * math.cos(self.cross_deg)), int(cross_center[1] - r * math.sin(self.cross_deg)), 
+                             int(cross_center[0] + r * math.cos(self.cross_deg)), int(cross_center[1] + r * math.sin(self.cross_deg)))
+            
+            painter.drawLine(int(cross_center[0] - r * math.cos(self.cross_deg + (math.pi / 2))), int(cross_center[1] - r * math.sin(self.cross_deg + (math.pi / 2))), 
+                             int(cross_center[0] + r * math.cos(self.cross_deg + (math.pi / 2))), int(cross_center[1] + r * math.sin(self.cross_deg + (math.pi / 2))))
+            
     def set_delay_sec(self, sec: int):
         self.camera_stream.set_delay(sec)
 
     def set_video_widget_width(self, width):
         self.width = width
         self.height = int(width * 9 / 16)
-        self.setMinimumSize(self.width, self.height)
-    
+        
+        if self.rotate_flag % 2 == 0:
+            self.setMinimumSize(self.width, self.height)
+        else:
+            self.setMinimumSize(self.height, self.width)
+
     def set_cross_flag(self, f: bool):
         self.cross_flag = f
     
@@ -199,12 +225,24 @@ class VideoWidget(QWidget):
     def set_cross_y(self, y):
         self.cross_y = y * 0.01
 
+    def set_cross_deg(self, deg):
+        self.cross_deg = math.radians(deg)
+
     def start_record(self, filename):
         self.camera_stream.start_recording(filename)
     
     def stop_record(self):
         self.camera_stream.stop_recording()
 
+    def update_rotate(self):
+        self.rotate_flag += 1
+        if self.rotate_flag > 3:
+            self.rotate_flag = 0
+
+        if self.rotate_flag % 2 == 0:
+            self.setMinimumSize(self.width, self.height)
+        else:
+            self.setMinimumSize(self.height, self.width)
 
     def cv_to_qimage(self, frame):
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -248,10 +286,12 @@ class SettingWindow(QMainWindow):
         self.tab_layouts = [self.camera_tab_layout, self.view_tab_layout, self.record_tab_layout]
         self.camera_idx_combos = []
         self.width_sliders = []
+        self.rotate_buttons = []
         self.delay_slider = QSlider(Qt.Orientation.Horizontal)
         self.delay_textbox = QLineEdit()
         self.cross_x_sliders = []
         self.cross_y_sliders = []
+        self.cross_deg_sliders = []
 
         self.reload()
         
@@ -262,8 +302,10 @@ class SettingWindow(QMainWindow):
 
         self.camera_idx_combos = []
         self.width_sliders = []
+        self.rotate_buttons = []
         self.cross_x_sliders = []
         self.cross_y_sliders = []
+        self.cross_deg_sliders = []
 
         #--- camera num combo ---
         camera_num_layout = QHBoxLayout()
@@ -291,7 +333,6 @@ class SettingWindow(QMainWindow):
             self.camera_idx_combos.append(camera_idx_combo)
 
         self.camera_tab_layout.addLayout(camera_idx_layout)
-
         #--- camera index combo ---
 
 
@@ -299,6 +340,12 @@ class SettingWindow(QMainWindow):
         camera_conf_apply_button.clicked.connect(self.update_camera_num)
         self.camera_tab_layout.addWidget(camera_conf_apply_button)
         
+
+
+        camera_video_group = QGroupBox()
+        camera_video_layout = QVBoxLayout()
+        camera_video_group.setLayout(camera_video_layout)
+        self.view_tab_layout.addWidget(camera_video_group)
 
         #--- camera delay slider ---
         delay_layout = QHBoxLayout()
@@ -312,11 +359,30 @@ class SettingWindow(QMainWindow):
         delay_layout.addWidget(QLabel(f"Camera delay(sec)"))
         delay_layout.addWidget(self.delay_slider)
         delay_layout.addWidget(self.delay_textbox)
-        self.view_tab_layout.addLayout(delay_layout)
+        camera_video_layout.addLayout(delay_layout)
         #--- camera delay slider ---
-        
+
+
+        #--- camera rotate button ---
+        rotate_layout = QHBoxLayout()
+        for i in self.cam_indexes:
+            rotate_button = QPushButton(f"Rotate")
+            rotate_button.clicked.connect(functools.partial(self.update_rotate, i))
+            rotate_layout.addWidget(QLabel(f"Camera {i}"))
+            rotate_layout.addWidget(rotate_button)
+            
+            self.rotate_buttons.append(rotate_button)
+
+        camera_video_layout.addLayout(rotate_layout)
+        #--- camera rotate button ---
+
 
         #--- camera size slider ---
+        camera_size_group = QGroupBox("Size")
+        camera_size_layout = QVBoxLayout()
+        camera_size_group.setLayout(camera_size_layout)
+        camera_video_layout.addWidget(camera_size_group)
+
         for i in self.cam_indexes:
             slider_layout = QHBoxLayout()
             slider = QSlider(Qt.Orientation.Horizontal)
@@ -327,19 +393,25 @@ class SettingWindow(QMainWindow):
             slider_layout.addWidget(slider)
             self.width_sliders.append(slider)
 
-            self.view_tab_layout.addLayout(slider_layout)
+            camera_size_layout.addLayout(slider_layout)
         #--- camera size slider ---
 
 
+        cross_group = QGroupBox("Cross")
+        cross_layout = QVBoxLayout()
+        cross_group.setLayout(cross_layout)
+        self.view_tab_layout.addWidget(cross_group)        
+
         #--- display cross ---
-        self.cross_layout = QHBoxLayout()
+        cross_view_layout = QHBoxLayout()
         self.cross_checkbox = QCheckBox("View cross")
         self.cross_checkbox.setChecked(False)
         self.cross_checkbox.toggled.connect(self.update_cross_checkbox)
         
-        self.cross_layout.addWidget(self.cross_checkbox)
-        self.view_tab_layout.addLayout(self.cross_layout)
+        cross_view_layout.addWidget(self.cross_checkbox)
+        cross_layout.addLayout(cross_view_layout)
         #--- display cross ---
+
 
         #--- cross height slider ---
         for i in self.cam_indexes:
@@ -355,16 +427,24 @@ class SettingWindow(QMainWindow):
             slider_y.setValue(50)
             slider_y.valueChanged.connect(self.update_cross_y_slider_values)
 
-            slider_layout.addWidget(QLabel(f"Camera {i}"))
+            slider_deg = QSlider(Qt.Orientation.Horizontal)
+            slider_deg.setRange(0, 90)
+            slider_deg.setValue(0)
+            slider_deg.valueChanged.connect(self.update_cross_deg_slider_values)
+
+            slider_layout.addWidget(QLabel(f"Camera {i}   "))
+            slider_layout.addWidget(QLabel(f"x:"))
             slider_layout.addWidget(slider_x)
+            slider_layout.addWidget(QLabel(f"y:"))
             slider_layout.addWidget(slider_y)
+            slider_layout.addWidget(QLabel(f"deg:"))
+            slider_layout.addWidget(slider_deg)
             self.cross_x_sliders.append(slider_x)
             self.cross_y_sliders.append(slider_y)
+            self.cross_deg_sliders.append(slider_deg)
 
-            self.view_tab_layout.addLayout(slider_layout)
+            cross_layout.addLayout(slider_layout)
         #--- cross height slider ---
-
-
 
 
         record_start_button = QPushButton("Start")
@@ -418,7 +498,14 @@ class SettingWindow(QMainWindow):
         cross_y = [cross_slider.value() for cross_slider in self.cross_y_sliders]
         for i, video_widget in enumerate(self.videos_widget.video_widgets):
             video_widget.set_cross_y(cross_y[i])
-        
+    
+    def update_cross_deg_slider_values(self):
+        if len(self.cross_deg_sliders) != len(self.videos_widget.video_widgets):
+            print(f"[!] update cross deg slider value: out of range")
+            return
+        cross_deg = [cross_slider.value() for cross_slider in self.cross_deg_sliders]
+        for i, video_widget in enumerate(self.videos_widget.video_widgets):
+            video_widget.set_cross_deg(cross_deg[i])
         
     def update_delay_textbox_value(self):
         if self.delay_textbox.text() != "":
@@ -435,6 +522,13 @@ class SettingWindow(QMainWindow):
     def update_cross_checkbox(self):
         for video_widget in self.videos_widget.video_widgets:
             video_widget.set_cross_flag(self.cross_checkbox.isChecked())
+
+    def update_rotate(self, i):
+        if len(self.cam_indexes) < i:
+            print("[!] update rotate: out of range")
+            return
+        
+        self.videos_widget.video_widgets[i].update_rotate()
 
     def start_record(self):
         self.videos_widget.start_record()
