@@ -1,0 +1,26 @@
+{
+    "VideosWidget": {
+        "camera_indexes": [
+            0,
+            1
+        ],
+        "delay_sec": 0,
+        "delay_sec_max": 40
+    },
+    "VideoWidget": {
+        "0": {
+            "width": 640,
+            "cross_x": 50,
+            "cross_y": 50,
+            "cross_deg": 0,
+            "rotate_flag": 0
+        },
+        "1": {
+            "width": 640,
+            "cross_x": 50,
+            "cross_y": 50,
+            "cross_deg": 0,
+            "rotate_flag": 0
+        }
+    }
+}

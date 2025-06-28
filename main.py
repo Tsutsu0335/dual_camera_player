@@ -4,6 +4,7 @@ import time
 import shutil
 import functools
 import math
+import json
 
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QPushButton, QWidget, QLineEdit,
@@ -25,8 +26,12 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("Camera Player")
 
+        self.setting_dict = None
+        with open("config.json", "r") as setting_file:
+            self.setting_dict = json.load(setting_file)
+
         #--- central widget ---
-        self.central_widget = VideosWidget([0, 1])
+        self.central_widget = VideosWidget(self.setting_dict)
         self.setCentralWidget(self.central_widget)
         #--- central widget ---
 
@@ -62,43 +67,94 @@ class MainWindow(QMainWindow):
 
     
     def closeEvent(self, _):
+        video_confs = []
+        for video_widget in self.central_widget.video_widgets:
+            _dict = {}
+            _dict["width"] = video_widget.width
+            _dict["cross_x"] = int(video_widget.cross_x * 100)
+            _dict["cross_y"] = int(video_widget.cross_y * 100)
+            _dict["cross_deg"] = math.degrees(video_widget.cross_deg)
+            _dict["rotate_flag"] = video_widget.rotate_flag
+            video_confs.append(_dict)
+        
+        video_dict = {}
+        for i, video_conf in enumerate(video_confs):
+            video_dict[str(i)] = video_conf
+
+        dict = {
+            "VideosWidget": {
+                "camera_indexes": self.central_widget.cam_indexes,
+                "delay_sec": self.central_widget.delay_sec,
+                "delay_sec_max": self.central_widget.delay_sec_max
+            },
+            "VideoWidget": video_dict
+        }
+
+        with open("config.json", "w") as setting_file:
+            json.dump(dict, setting_file, indent=4)
+
         if self.central_widget.setting_window is not None and self.central_widget.setting_window.isVisible():
             self.central_widget.setting_window.close()
-        return super().closeEvent(_)
         
 class VideosWidget(QWidget):
-    def __init__(self, cam_indexes: list):
+    def __init__(self, setting_dict):
         super().__init__()
         self.available_cameras = detect_available_cameras()
 
         self.layout = FlowLayout()
-        self.cam_indexes = cam_indexes
+        self.cam_indexes = setting_dict["VideosWidget"]["camera_indexes"]
         self.video_widgets = []
         self.setting_window = None
         self.recording = False
         self.filenames = []
-        self.delay_sec = 0
+        self.delay_sec = setting_dict["VideosWidget"]["delay_sec"]
+        self.delay_sec_max = setting_dict["VideosWidget"]["delay_sec_max"]
         
         self.tmp_dir = tmp_dir
 
         self.reload()
+
+        for i, video_widget in enumerate(self.video_widgets):
+            video_widget.set_delay_sec(self.delay_sec)
+            video_widget.set_video_widget_width(setting_dict["VideoWidget"][str(i)]["width"])
+            video_widget.set_cross_x(setting_dict["VideoWidget"][str(i)]["cross_x"])
+            video_widget.set_cross_y(setting_dict["VideoWidget"][str(i)]["cross_y"])
+            video_widget.set_cross_deg(setting_dict["VideoWidget"][str(i)]["cross_deg"])
+            video_widget.set_rotate(setting_dict["VideoWidget"][str(i)]["rotate_flag"])
 
         self.setLayout(self.layout)
 
     def reload(self):
         self.stop_record()
 
+        video_confs = []
         for video_widget in self.video_widgets:
+            _dict = {}
+            _dict["width"] = video_widget.width
+            _dict["cross_x"] = int(video_widget.cross_x * 100)
+            _dict["cross_y"] = int(video_widget.cross_y * 100)
+            _dict["cross_deg"] = math.degrees(video_widget.cross_deg)
+            _dict["rotate_flag"] = video_widget.rotate_flag
+            video_confs.append(_dict)
+
             self.layout.removeWidget(video_widget)
             video_widget.close()
             video_widget.deleteLater()
 
         self.video_widgets = []
 
-        for cam_index in self.cam_indexes:
-            self.video_widgets.append(VideoWidget(cam_index))
-            self.layout.addWidget(self.video_widgets[-1])
+        for i, cam_index in enumerate(self.cam_indexes):
+            self.video_widgets.append(VideoWidget(cam_index, delay_sec_max=self.delay_sec_max))
+            
+            if i < len(video_confs):
+                self.video_widgets[-1].set_delay_sec(self.delay_sec)
+                self.video_widgets[-1].set_video_widget_width(video_confs[i]["width"])
+                self.video_widgets[-1].set_cross_x(video_confs[i]["cross_x"])
+                self.video_widgets[-1].set_cross_y(video_confs[i]["cross_y"])
+                self.video_widgets[-1].set_cross_deg(video_confs[i]["cross_deg"])
+                self.video_widgets[-1].set_rotate(video_confs[i]["rotate_flag"])
 
+            self.layout.addWidget(self.video_widgets[-1])
 
     def set_cam_indexes(self, cam_indexes):
         self.cam_indexes = cam_indexes
@@ -146,9 +202,13 @@ class VideosWidget(QWidget):
         self.recording = False
 
     def update_delay(self, delay_sec):
-        self.delay_sec = min(max(0, delay_sec), self.video_widgets[0].delay_sec_max)
+        self.delay_sec = min(max(0, delay_sec), self.delay_sec_max)
         for video_widget in self.video_widgets:
             video_widget.set_delay_sec(self.delay_sec)
+        
+        if self.setting_window is not None:
+            self.setting_window.delay_slider.setValue(self.delay_sec)
+            self.setting_window.delay_textbox.setText(str(self.delay_sec))
 
     def toggle_record(self):
         if self.recording:
@@ -234,6 +294,14 @@ class VideoWidget(QWidget):
     def stop_record(self):
         self.camera_stream.stop_recording()
 
+    def set_rotate(self, rotate_flag):
+        self.rotate_flag = max(0, min(rotate_flag, 3))
+
+        if self.rotate_flag % 2 == 0:
+            self.setMinimumSize(self.width, self.height)
+        else:
+            self.setMinimumSize(self.height, self.width)
+
     def update_rotate(self):
         self.rotate_flag += 1
         if self.rotate_flag > 3:
@@ -251,7 +319,6 @@ class VideoWidget(QWidget):
     
     def closeEvent(self, _):
         self.camera_stream.release()
-        return super().closeEvent(_)
 
 
 class SettingWindow(QMainWindow):
@@ -350,9 +417,9 @@ class SettingWindow(QMainWindow):
         #--- camera delay slider ---
         delay_layout = QHBoxLayout()
         self.delay_slider = QSlider(Qt.Orientation.Horizontal)
-        self.delay_slider.setRange(0, 40)
+        self.delay_slider.setRange(0, self.videos_widget.delay_sec_max)
         self.delay_slider.setValue(self.videos_widget.delay_sec)
-        self.delay_slider.valueChanged.connect(self.update_delay_slider_value)
+        self.delay_slider.sliderMoved.connect(self.update_delay_slider_value)
         self.delay_textbox = QLineEdit(str(self.delay_slider.value()))
         self.delay_textbox.setFixedWidth(50)
         self.delay_textbox.textEdited.connect(self.update_delay_textbox_value)
@@ -365,7 +432,7 @@ class SettingWindow(QMainWindow):
 
         #--- camera rotate button ---
         rotate_layout = QHBoxLayout()
-        for i in self.cam_indexes:
+        for i, cam_index in enumerate(self.cam_indexes):
             rotate_button = QPushButton(f"Rotate")
             rotate_button.clicked.connect(functools.partial(self.update_rotate, i))
             rotate_layout.addWidget(QLabel(f"Camera {i}"))
@@ -383,11 +450,11 @@ class SettingWindow(QMainWindow):
         camera_size_group.setLayout(camera_size_layout)
         camera_video_layout.addWidget(camera_size_group)
 
-        for i in self.cam_indexes:
+        for i, cam_index in enumerate(self.cam_indexes):
             slider_layout = QHBoxLayout()
             slider = QSlider(Qt.Orientation.Horizontal)
             slider.setRange(320, 1920)
-            slider.setValue(640)
+            slider.setValue(self.videos_widget.video_widgets[i].width)
             slider.valueChanged.connect(self.update_width_slider_values)
             slider_layout.addWidget(QLabel(f"Camera {i}"))
             slider_layout.addWidget(slider)
@@ -414,22 +481,22 @@ class SettingWindow(QMainWindow):
 
 
         #--- cross height slider ---
-        for i in self.cam_indexes:
+        for i, cam_index in enumerate(self.cam_indexes):
             slider_layout = QHBoxLayout()
 
             slider_x = QSlider(Qt.Orientation.Horizontal)
             slider_x.setRange(0, 100)
-            slider_x.setValue(50)
+            slider_x.setValue(int(self.videos_widget.video_widgets[i].cross_x * 100))
             slider_x.valueChanged.connect(self.update_cross_x_slider_values)
 
             slider_y = QSlider(Qt.Orientation.Horizontal)
             slider_y.setRange(0, 100)
-            slider_y.setValue(50)
+            slider_y.setValue(int(self.videos_widget.video_widgets[i].cross_y * 100))
             slider_y.valueChanged.connect(self.update_cross_y_slider_values)
 
             slider_deg = QSlider(Qt.Orientation.Horizontal)
             slider_deg.setRange(0, 90)
-            slider_deg.setValue(0)
+            slider_deg.setValue(int(math.degrees(self.videos_widget.video_widgets[i].cross_deg)))
             slider_deg.valueChanged.connect(self.update_cross_deg_slider_values)
 
             slider_layout.addWidget(QLabel(f"Camera {i}   "))
@@ -482,6 +549,11 @@ class SettingWindow(QMainWindow):
     def update_delay_slider_value(self, delay_sec):
         self.delay_textbox.setText(str(delay_sec))
         self.videos_widget.update_delay(int(delay_sec))
+        
+    def update_delay_textbox_value(self, text):
+        if text != "":
+            self.delay_slider.setValue(int(text))
+            self.videos_widget.update_delay(int(text))
 
     def update_cross_x_slider_values(self):
         if len(self.cross_x_sliders) != len(self.videos_widget.video_widgets):
@@ -507,10 +579,6 @@ class SettingWindow(QMainWindow):
         for i, video_widget in enumerate(self.videos_widget.video_widgets):
             video_widget.set_cross_deg(cross_deg[i])
         
-    def update_delay_textbox_value(self):
-        if self.delay_textbox.text() != "":
-            self.delay_slider.setValue(int(self.delay_textbox.text()))
-
     def update_width_slider_values(self):
         if len(self.width_sliders) != len(self.videos_widget.video_widgets):
             print("[!] update width slider value: out of range")
